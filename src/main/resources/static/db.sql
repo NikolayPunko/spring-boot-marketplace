@@ -206,10 +206,10 @@ INSERT INTO roles (name) VALUES
 
 -- Users
 INSERT INTO users (email, password) VALUES
-                                        ('admin@mail.com', '1234'),
-                                        ('seller@mail.com', '1234'),
-                                        ('buyer1@mail.com', '1234'),
-                                        ('buyer2@mail.com', '1234');
+                                        ('admin@mail.com', '$2a$10$9zAAT/tqIpdw1VKhU/W1MuAemC/dCxNTNYL9G7fAU5wl24iT49No2'),
+                                        ('seller@mail.com', '$2a$10$9zAAT/tqIpdw1VKhU/W1MuAemC/dCxNTNYL9G7fAU5wl24iT49No2'),
+                                        ('buyer1@mail.com', '$2a$10$9zAAT/tqIpdw1VKhU/W1MuAemC/dCxNTNYL9G7fAU5wl24iT49No2'),
+                                        ('buyer2@mail.com', '$2a$10$9zAAT/tqIpdw1VKhU/W1MuAemC/dCxNTNYL9G7fAU5wl24iT49No2');
 
 -- Assign roles
 INSERT INTO user_roles VALUES
