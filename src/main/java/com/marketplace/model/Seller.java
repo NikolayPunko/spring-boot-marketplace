@@ -1,5 +1,6 @@
 package com.marketplace.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -17,6 +18,7 @@ public class Seller {
 
     @OneToOne
     @JoinColumn(name = "user_id", unique = true)
+    @JsonIgnoreProperties({"password"})
     private User user;
 
     @Column(name = "store_name", nullable = false)

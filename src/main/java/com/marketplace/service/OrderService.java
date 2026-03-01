@@ -261,4 +261,58 @@ public class OrderService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
         }
     }
+
+    public Map<String, Object> getSellerOrderDetails(long orderId, Authentication auth) {
+
+        // 1) sellerId текущего пользователя
+        Long sellerId = jdbcTemplate.queryForObject("""
+            SELECT s.id
+            FROM sellers s
+            JOIN users u ON u.id = s.user_id
+            WHERE u.email = ?
+            """, Long.class, auth.getName());
+
+        if (sellerId == null) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not a seller");
+        }
+
+        // 2) проверяем что заказ содержит товары этого продавца
+        Integer cnt = jdbcTemplate.queryForObject("""
+            SELECT COUNT(*)
+            FROM order_items oi
+            JOIN products p ON p.id = oi.product_id
+            WHERE oi.order_id = ? AND p.seller_id = ?
+            """, Integer.class, orderId, sellerId);
+
+        if (cnt == null || cnt == 0) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No access to this order");
+        }
+
+        // 3) шапка заказа (общая)
+        Map<String, Object> head = jdbcTemplate.queryForMap("""
+            SELECT
+              o.id           AS order_id,
+              o.status       AS status,
+              o.created_at   AS created_at,
+              o.total_amount AS total_amount
+            FROM orders o
+            WHERE o.id = ?
+            """, orderId);
+
+        // 4) позиции заказа ТОЛЬКО этого продавца
+        List<Map<String, Object>> items = jdbcTemplate.queryForList("""
+            SELECT
+              oi.product_id AS productId,
+              p.name        AS name,
+              oi.quantity   AS qty,
+              oi.price      AS price
+            FROM order_items oi
+            JOIN products p ON p.id = oi.product_id
+            WHERE oi.order_id = ? AND p.seller_id = ?
+            ORDER BY oi.id
+            """, orderId, sellerId);
+
+        head.put("items", items);
+        return head;
+    }
 }

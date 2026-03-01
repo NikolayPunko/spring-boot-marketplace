@@ -52,6 +52,14 @@ public class OrderController {
         return orderService.getSellerOrders(auth);
     }
 
+    // SELLER: детали заказа (только позиции продавца)
+    @GetMapping("/seller/{orderId}")
+    @PreAuthorize("hasRole('SELLER')")
+    public Map<String, Object> sellerOrderDetails(@PathVariable long orderId,
+                                                  Authentication auth) {
+        return orderService.getSellerOrderDetails(orderId, auth);
+    }
+
     // ADMIN: все заказы
     @GetMapping("/admin")
     @PreAuthorize("hasRole('ADMIN')")
