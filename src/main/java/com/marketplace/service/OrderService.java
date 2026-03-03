@@ -38,10 +38,10 @@ public class OrderService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Order items are empty");
         }
 
-        // 1. create_order(INT)
+        // 1) create_order(INT)
         jdbcTemplate.update("CALL create_order(CAST(? AS INT))", user.getId());
 
-        // 2. Получаем ID последнего заказа пользователя
+        // 2) id последнего заказа
         Integer orderId = jdbcTemplate.queryForObject(
                 "SELECT id FROM orders WHERE user_id = CAST(? AS INT) ORDER BY id DESC LIMIT 1",
                 Integer.class,
@@ -52,7 +52,7 @@ public class OrderService {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Order creation failed");
         }
 
-        // 3. add_order_item(INT, INT, INT)
+        // 3) add_order_item(INT, INT, INT)
         for (CreateOrderRequest.OrderItemRequest item : request.getItems()) {
 
             if (item.getProductId() == null || item.getQuantity() == null || item.getQuantity() <= 0) {
@@ -67,7 +67,7 @@ public class OrderService {
             );
         }
 
-        // 4. Получаем сумму (триггер пересчитал total_amount)
+        // 4) total_amount (триггер пересчитал)
         BigDecimal totalAmount = jdbcTemplate.queryForObject(
                 "SELECT total_amount FROM orders WHERE id = CAST(? AS INT)",
                 BigDecimal.class,
@@ -76,12 +76,32 @@ public class OrderService {
 
         if (totalAmount == null) totalAmount = BigDecimal.ZERO;
 
-        // 5. create_payment(INT, NUMERIC)
+        // 5) create_payment(INT, NUMERIC) => payments + orders.status='PAID'
         jdbcTemplate.update(
                 "CALL create_payment(CAST(? AS INT), ?)",
                 orderId,
                 totalAmount
         );
+
+        // 6) deliveries: создаём запись (если её ещё нет)
+        // адрес можно позже расширить, сейчас минимально "Not specified"
+        Integer delCnt = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM deliveries WHERE order_id = CAST(? AS INT)",
+                Integer.class,
+                orderId
+        );
+
+        String address = request.getAddress();
+        if (address == null || address.isBlank()) {
+            address = "Not specified";
+        }
+
+        if (delCnt == null || delCnt == 0) {
+            jdbcTemplate.update("""
+                    INSERT INTO deliveries(order_id, address, delivery_status)
+                    VALUES (CAST(? AS INT), ?, 'PROCESSING')
+                    """, orderId, address);
+        }
 
         return orderId.longValue();
     }
@@ -103,7 +123,7 @@ public class OrderService {
     }
 
     // =========================
-    // BUYER: ДЕТАЛИ МОЕГО ЗАКАЗА
+    // BUYER: ДЕТАЛИ МОЕГО ЗАКАЗА (+ delivery)
     // =========================
     public Map<String, Object> getMyOrderDetails(long orderId, Authentication auth) {
 
@@ -145,12 +165,24 @@ public class OrderService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
         }
 
-        return rows.get(0);
+        Map<String, Object> head = rows.get(0);
+
+        // delivery (если есть)
+        List<Map<String, Object>> del = jdbcTemplate.queryForList("""
+                SELECT id, address, delivery_status
+                FROM deliveries
+                WHERE order_id = CAST(? AS INT)
+                LIMIT 1
+                """, orderId);
+
+        head.put("delivery", del.isEmpty() ? null : del.get(0));
+        return head;
     }
 
     // =========================
-    // BUYER: ОТМЕНА ЗАКАЗА
+    // BUYER: ОТМЕНА ЗАКАЗА (+ delivery)
     // =========================
+    @Transactional
     public void cancelMyOrder(long orderId, Authentication auth) {
 
         User user = userRepository.findByEmail(auth.getName())
@@ -168,6 +200,13 @@ public class OrderService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "You can cancel only your NEW orders");
         }
+
+        // синхронизируем delivery
+        jdbcTemplate.update("""
+                UPDATE deliveries
+                SET delivery_status = 'CANCELLED'
+                WHERE order_id = CAST(? AS INT)
+                """, orderId);
     }
 
     // =========================
@@ -213,7 +252,7 @@ public class OrderService {
     }
 
     // =========================
-    // ADMIN: ДЕТАЛИ ЛЮБОГО ЗАКАЗА
+    // ADMIN: ДЕТАЛИ ЛЮБОГО ЗАКАЗА (+ delivery)
     // =========================
     public Map<String, Object> getOrderDetailsAdmin(long orderId) {
 
@@ -243,13 +282,28 @@ public class OrderService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
         }
 
-        return rows.get(0);
+        Map<String, Object> head = rows.get(0);
+
+        List<Map<String, Object>> del = jdbcTemplate.queryForList("""
+                SELECT id, address, delivery_status
+                FROM deliveries
+                WHERE order_id = CAST(? AS INT)
+                LIMIT 1
+                """, orderId);
+
+        head.put("delivery", del.isEmpty() ? null : del.get(0));
+        return head;
     }
 
     // =========================
-    // ADMIN: СМЕНА СТАТУСА
+    // ADMIN: СМЕНА СТАТУСА (+ синхронизация delivery)
     // =========================
+    @Transactional
     public void updateOrderStatus(long orderId, String status) {
+
+        if (status == null || status.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "status is required");
+        }
 
         int updated = jdbcTemplate.update("""
                 UPDATE orders
@@ -260,59 +314,97 @@ public class OrderService {
         if (updated == 0) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
         }
+
+        // гарантируем что delivery существует (если по старым заказам нет)
+        Integer delCnt = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM deliveries WHERE order_id = CAST(? AS INT)",
+                Integer.class,
+                orderId
+        );
+        if (delCnt == null || delCnt == 0) {
+            jdbcTemplate.update("""
+                    INSERT INTO deliveries(order_id, address, delivery_status)
+                    VALUES (CAST(? AS INT), ?, 'PROCESSING')
+                    """, orderId, "Not specified");
+        }
+
+        // синхронизируем delivery_status по статусу заказа
+        // минимальная маппинг-логика
+        String deliveryStatus = null;
+
+        if ("DELIVERED".equalsIgnoreCase(status)) deliveryStatus = "DELIVERED";
+        if ("CANCELLED".equalsIgnoreCase(status)) deliveryStatus = "CANCELLED";
+
+        // можно добавить SHIPPED/PROCESSING при желании, но минимально достаточно DELIVERED/CANCELLED
+        if (deliveryStatus != null) {
+            jdbcTemplate.update("""
+                    UPDATE deliveries
+                    SET delivery_status = ?
+                    WHERE order_id = CAST(? AS INT)
+                    """, deliveryStatus, orderId);
+        }
     }
 
+    // =========================
+    // SELLER: ДЕТАЛИ ЗАКАЗА (ТОЛЬКО ЕГО ПОЗИЦИИ) + delivery
+    // =========================
     public Map<String, Object> getSellerOrderDetails(long orderId, Authentication auth) {
 
-        // 1) sellerId текущего пользователя
         Long sellerId = jdbcTemplate.queryForObject("""
-            SELECT s.id
-            FROM sellers s
-            JOIN users u ON u.id = s.user_id
-            WHERE u.email = ?
-            """, Long.class, auth.getName());
+                SELECT s.id
+                FROM sellers s
+                JOIN users u ON u.id = s.user_id
+                WHERE u.email = ?
+                """, Long.class, auth.getName());
 
         if (sellerId == null) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Not a seller");
         }
 
-        // 2) проверяем что заказ содержит товары этого продавца
         Integer cnt = jdbcTemplate.queryForObject("""
-            SELECT COUNT(*)
-            FROM order_items oi
-            JOIN products p ON p.id = oi.product_id
-            WHERE oi.order_id = ? AND p.seller_id = ?
-            """, Integer.class, orderId, sellerId);
+                SELECT COUNT(*)
+                FROM order_items oi
+                JOIN products p ON p.id = oi.product_id
+                WHERE oi.order_id = ? AND p.seller_id = ?
+                """, Integer.class, orderId, sellerId);
 
         if (cnt == null || cnt == 0) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No access to this order");
         }
 
-        // 3) шапка заказа (общая)
         Map<String, Object> head = jdbcTemplate.queryForMap("""
-            SELECT
-              o.id           AS order_id,
-              o.status       AS status,
-              o.created_at   AS created_at,
-              o.total_amount AS total_amount
-            FROM orders o
-            WHERE o.id = ?
-            """, orderId);
+                SELECT
+                  o.id           AS order_id,
+                  o.status       AS status,
+                  o.created_at   AS created_at,
+                  o.total_amount AS total_amount
+                FROM orders o
+                WHERE o.id = ?
+                """, orderId);
 
-        // 4) позиции заказа ТОЛЬКО этого продавца
         List<Map<String, Object>> items = jdbcTemplate.queryForList("""
-            SELECT
-              oi.product_id AS productId,
-              p.name        AS name,
-              oi.quantity   AS qty,
-              oi.price      AS price
-            FROM order_items oi
-            JOIN products p ON p.id = oi.product_id
-            WHERE oi.order_id = ? AND p.seller_id = ?
-            ORDER BY oi.id
-            """, orderId, sellerId);
+                SELECT
+                  oi.product_id AS productId,
+                  p.name        AS name,
+                  oi.quantity   AS qty,
+                  oi.price      AS price
+                FROM order_items oi
+                JOIN products p ON p.id = oi.product_id
+                WHERE oi.order_id = ? AND p.seller_id = ?
+                ORDER BY oi.id
+                """, orderId, sellerId);
 
         head.put("items", items);
+
+        List<Map<String, Object>> del = jdbcTemplate.queryForList("""
+                SELECT id, address, delivery_status
+                FROM deliveries
+                WHERE order_id = CAST(? AS INT)
+                LIMIT 1
+                """, orderId);
+
+        head.put("delivery", del.isEmpty() ? null : del.get(0));
+
         return head;
     }
 }
