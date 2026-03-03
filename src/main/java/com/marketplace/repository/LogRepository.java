@@ -23,20 +23,20 @@ public class LogRepository {
             int limit
     ) {
         String sql = """
-                SELECT a.id,
-                       a.created_at,
-                       a.table_name,
-                       a.action,
-                       a.record_id,
-                       a.user_id,
-                       u.email AS user_email
+                SELECT
+                  a.id,
+                  a.action_time AS created_at,
+                  a.table_name,
+                  a.action,
+                  a.user_id,
+                  u.email AS user_email
                 FROM audit_log a
                 LEFT JOIN users u ON u.id = a.user_id
-                WHERE (:start IS NULL OR a.created_at::date >= :start)
-                  AND (:end IS NULL OR a.created_at::date <= :end)
+                WHERE (:start IS NULL OR a.action_time::date >= :start)
+                  AND (:end IS NULL OR a.action_time::date <= :end)
                   AND (:tableName IS NULL OR a.table_name = :tableName)
                   AND (:action IS NULL OR a.action = :action)
-                ORDER BY a.created_at DESC
+                ORDER BY a.action_time DESC
                 LIMIT :lim
                 """;
 

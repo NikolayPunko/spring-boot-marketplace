@@ -174,13 +174,14 @@ public class ReportRepository {
     // 10) Сводка audit_log по таблицам/действиям
     public List<Map<String, Object>> auditSummary(LocalDate start, LocalDate end) {
         String sql = """
-                SELECT a.table_name,
-                       a.action,
-                       COUNT(*) AS actions_count,
-                       MIN(a.created_at) AS first_event,
-                       MAX(a.created_at) AS last_event
+                SELECT
+                  a.table_name,
+                  a.action,
+                  COUNT(*) AS actions_count,
+                  MIN(a.action_time) AS first_event,
+                  MAX(a.action_time) AS last_event
                 FROM audit_log a
-                WHERE a.created_at::date BETWEEN :start AND :end
+                WHERE a.action_time::date BETWEEN :start AND :end
                 GROUP BY a.table_name, a.action
                 ORDER BY actions_count DESC
                 """;
