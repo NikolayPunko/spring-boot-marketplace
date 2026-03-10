@@ -188,25 +188,44 @@ public class OrderService {
         User user = userRepository.findByEmail(auth.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
 
-        int updated = jdbcTemplate.update("""
-                UPDATE orders
-                SET status = 'CANCELLED'
+        // 1) проверяем, что заказ принадлежит пользователю и он NEW
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM orders
                 WHERE id = CAST(? AS INT)
                   AND user_id = CAST(? AS INT)
-                  AND status = 'NEW'
-                """, orderId, user.getId());
+                """, Integer.class, orderId, user.getId());
 
-        if (updated == 0) {
+        if (count == null || count == 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "You can cancel only your NEW orders");
         }
 
-        // синхронизируем delivery
-        jdbcTemplate.update("""
-                UPDATE deliveries
-                SET delivery_status = 'CANCELLED'
-                WHERE order_id = CAST(? AS INT)
-                """, orderId);
+        // 2) теперь используем ПРОЦЕДУРУ cancel_order(INT)
+        jdbcTemplate.update(
+                "CALL cancel_order(CAST(? AS INT))",
+                orderId
+        );
+
+        // 3) синхронизируем доставку
+        Integer delCnt = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM deliveries WHERE order_id = CAST(? AS INT)",
+                Integer.class,
+                orderId
+        );
+
+        if (delCnt == null || delCnt == 0) {
+            jdbcTemplate.update("""
+                    INSERT INTO deliveries(order_id, address, delivery_status)
+                    VALUES (CAST(? AS INT), ?, 'CANCELLED')
+                    """, orderId, "Not specified");
+        } else {
+            jdbcTemplate.update("""
+                    UPDATE deliveries
+                    SET delivery_status = 'CANCELLED'
+                    WHERE order_id = CAST(? AS INT)
+                    """, orderId);
+        }
     }
 
     // =========================

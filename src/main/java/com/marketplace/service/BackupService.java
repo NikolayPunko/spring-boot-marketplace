@@ -3,6 +3,7 @@ package com.marketplace.service;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
@@ -41,6 +42,8 @@ public class BackupService {
     @Value("${backup.dir}")
     private String backupDir;
 
+    private final JdbcTemplate jdbcTemplate;
+
     public Path createBackupFile() {
 
         try {
@@ -68,6 +71,11 @@ public class BackupService {
             if (!Files.exists(outFile) || Files.size(outFile) == 0) {
                 throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Backup file is empty");
             }
+
+            createSystemLog(
+                    "BACKUP_CREATE",
+                    "Backup created: " + outFile.getFileName()
+            );
 
             return outFile;
 
@@ -114,6 +122,11 @@ public class BackupService {
 
             runProcess(cmd);
 
+            createSystemLog(
+                    "BACKUP_RESTORE",
+                    "Database restored from file: " + file.getOriginalFilename()
+            );
+
             // можно удалить временный файл
             Files.deleteIfExists(tempSql);
 
@@ -158,5 +171,13 @@ public class BackupService {
             e.printStackTrace();
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Process error: " + e.getMessage());
         }
+    }
+
+    private void createSystemLog(String eventType, String description) {
+        jdbcTemplate.update(
+                "CALL create_system_log(CAST(? AS TEXT), CAST(? AS TEXT))",
+                eventType,
+                description
+        );
     }
 }
