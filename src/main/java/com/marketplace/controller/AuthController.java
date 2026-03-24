@@ -1,12 +1,15 @@
 package com.marketplace.controller;
 
+import com.marketplace.dto.AuthRegisterRequest;
 import com.marketplace.dto.AuthRequest;
 import com.marketplace.dto.AuthResponse;
 import com.marketplace.model.LoginHistory;
 import com.marketplace.model.Role;
+import com.marketplace.model.Seller;
 import com.marketplace.model.User;
 import com.marketplace.repository.LoginHistoryRepository;
 import com.marketplace.repository.RoleRepository;
+import com.marketplace.repository.SellerRepository;
 import com.marketplace.repository.UserRepository;
 import com.marketplace.security.JwtService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,6 +20,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 @RestController
@@ -28,36 +32,56 @@ public class AuthController {
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
+    private final SellerRepository sellerRepository;
     private final PasswordEncoder encoder;
 
     private final LoginHistoryRepository loginHistoryRepository;
 
-    public AuthController(AuthenticationManager authManager, JwtService jwtService, UserRepository userRepository, RoleRepository roleRepository, PasswordEncoder encoder, LoginHistoryRepository loginHistoryRepository) {
+    public AuthController(AuthenticationManager authManager, JwtService jwtService, UserRepository userRepository, RoleRepository roleRepository, SellerRepository sellerRepository, PasswordEncoder encoder, LoginHistoryRepository loginHistoryRepository) {
         this.authManager = authManager;
         this.jwtService = jwtService;
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
+        this.sellerRepository = sellerRepository;
         this.encoder = encoder;
         this.loginHistoryRepository = loginHistoryRepository;
     }
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
-    public void register(@RequestBody AuthRequest req) {
+    public void register(@RequestBody AuthRegisterRequest req) {
 
         if (userRepository.existsByEmail(req.getEmail())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Email already exists");
         }
 
-        Role buyerRole = roleRepository.findByName("BUYER")
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Role BUYER not found"));
+        boolean isSeller = Boolean.TRUE.equals(req.getIsSeller());
+        String roleName = isSeller ? "SELLER" : "BUYER";
 
-        User u = new User();
-        u.setEmail(req.getEmail());
-        u.setPassword(encoder.encode(req.getPassword()));
-        u.setCreatedAt(Instant.now());
-        u.getRoles().add(buyerRole);
-        userRepository.save(u);
+        Role userRole = roleRepository.findByName(roleName)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "Role " + roleName + " not found"
+                ));
+
+        User user = new User();
+        user.setEmail(req.getEmail());
+        user.setPassword(encoder.encode(req.getPassword()));
+        user.setCreatedAt(Instant.now());
+        user.getRoles().add(userRole);
+
+        user = userRepository.save(user);
+
+        if (isSeller) {
+            Seller seller = new Seller();
+            seller.setUser(user);
+
+            String storeName = "Магазин " + user.getEmail().split("@")[0];
+            seller.setStoreName(storeName);
+            seller.setRating(BigDecimal.ZERO);
+
+            sellerRepository.save(seller);
+        }
     }
 
     @PostMapping("/login")

@@ -84,7 +84,6 @@ public class OrderService {
         );
 
         // 6) deliveries: создаём запись (если её ещё нет)
-        // адрес можно позже расширить, сейчас минимально "Not specified"
         Integer delCnt = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM deliveries WHERE order_id = CAST(? AS INT)",
                 Integer.class,

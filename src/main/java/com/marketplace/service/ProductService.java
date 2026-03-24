@@ -132,6 +132,8 @@ public class ProductService {
             }
         }
 
-        productRepository.delete(product);
+        product.setStockQuantity(0);
+
+        productRepository.save(product);
     }
 }
