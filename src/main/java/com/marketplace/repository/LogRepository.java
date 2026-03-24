@@ -1,6 +1,7 @@
 package com.marketplace.repository;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -22,7 +23,7 @@ public class LogRepository {
             String action,
             int limit
     ) {
-        String sql = """
+        StringBuilder sql = new StringBuilder("""
                 SELECT
                   a.id,
                   a.action_time AS created_at,
@@ -32,21 +33,35 @@ public class LogRepository {
                   u.email AS user_email
                 FROM audit_log a
                 LEFT JOIN users u ON u.id = a.user_id
-                WHERE (:start IS NULL OR a.action_time::date >= :start)
-                  AND (:end IS NULL OR a.action_time::date <= :end)
-                  AND (:tableName IS NULL OR a.table_name = :tableName)
-                  AND (:action IS NULL OR a.action = :action)
-                ORDER BY a.action_time DESC
-                LIMIT :lim
-                """;
+                WHERE 1=1
+                """);
 
-        return jdbc.queryForList(sql, Map.of(
-                "start", start,
-                "end", end,
-                "tableName", emptyToNull(tableName),
-                "action", emptyToNull(action),
-                "lim", limit
-        ));
+        MapSqlParameterSource params = new MapSqlParameterSource();
+
+        if (start != null) {
+            sql.append(" AND a.action_time::date >= :start");
+            params.addValue("start", start);
+        }
+
+        if (end != null) {
+            sql.append(" AND a.action_time::date <= :end");
+            params.addValue("end", end);
+        }
+
+        if (tableName != null && !tableName.trim().isEmpty()) {
+            sql.append(" AND a.table_name = :tableName");
+            params.addValue("tableName", tableName);
+        }
+
+        if (action != null && !action.trim().isEmpty()) {
+            sql.append(" AND a.action = :action");
+            params.addValue("action", action);
+        }
+
+        sql.append(" ORDER BY a.action_time DESC LIMIT :lim");
+        params.addValue("lim", Math.min(limit, 1000));
+
+        return jdbc.queryForList(sql.toString(), params);
     }
 
     // login_history: фильтр по датам + userEmail + лимит
@@ -56,7 +71,7 @@ public class LogRepository {
             String userEmail,
             int limit
     ) {
-        String sql = """
+        StringBuilder sql = new StringBuilder("""
                 SELECT lh.id,
                        lh.login_time,
                        lh.ip_address,
@@ -64,22 +79,33 @@ public class LogRepository {
                        u.email AS user_email
                 FROM login_history lh
                 JOIN users u ON u.id = lh.user_id
-                WHERE (:start IS NULL OR lh.login_time::date >= :start)
-                  AND (:end IS NULL OR lh.login_time::date <= :end)
-                  AND (:email IS NULL OR u.email ILIKE '%' || :email || '%')
-                ORDER BY lh.login_time DESC
-                LIMIT :lim
-                """;
+                WHERE 1=1
+                """);
 
-        return jdbc.queryForList(sql, Map.of(
-                "start", start,
-                "end", end,
-                "email", emptyToNull(userEmail),
-                "lim", limit
-        ));
+        MapSqlParameterSource params = new MapSqlParameterSource();
+
+        if (start != null) {
+            sql.append(" AND lh.login_time::date >= :start");
+            params.addValue("start", start);
+        }
+
+        if (end != null) {
+            sql.append(" AND lh.login_time::date <= :end");
+            params.addValue("end", end);
+        }
+
+        if (userEmail != null && !userEmail.trim().isEmpty()) {
+            sql.append(" AND u.email ILIKE :email");
+            params.addValue("email", "%" + userEmail + "%");
+        }
+
+        sql.append(" ORDER BY lh.login_time DESC LIMIT :lim");
+        params.addValue("lim", Math.min(limit, 1000));
+
+        return jdbc.queryForList(sql.toString(), params);
     }
 
-    // Списки значений для фильтров (чтобы фронту было удобно)
+
     public List<Map<String, Object>> auditTableNames() {
         String sql = """
                 SELECT DISTINCT table_name
@@ -96,11 +122,5 @@ public class LogRepository {
                 ORDER BY action
                 """;
         return jdbc.queryForList(sql, Map.of());
-    }
-
-    private String emptyToNull(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        return t.isEmpty() ? null : t;
     }
 }
